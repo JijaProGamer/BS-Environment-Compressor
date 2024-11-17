@@ -36,7 +36,7 @@ VAE.beta = {
     mode: "cosine"
 }
 VAE.LR = [
-    { epoch: 0  , LR_Autoencoder: 0.005,  LR_Discriminator: 0.001   },
+    { epoch: 0  , LR_Autoencoder: 0.0005,  LR_Discriminator: 0.001   },
     { epoch: 25 , LR_Autoencoder: 0.00005,  LR_Discriminator: 0.0001   },
     { epoch: 100 , LR_Autoencoder: 0.00001, LR_Discriminator: 0.00001   }
 ];
