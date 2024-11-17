@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+
+<html>
+    <head>
+        <title>Compressor</title>
+    </head>
+
+    <body>
+        <div class="left">
+            <canvas></canvas>
+
+            <div class="images">
+    
+            </div>
+        </div>
+
+        <div class="right">
+            <div class="sliders">
+
+            </div>
+        </div>
+    </body>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+        }
+
+        canvas {
+            width: 60vw;
+            aspect-ratio: 16/9;
+
+            margin-left: 1vw;
+            margin-top: 1vw
+        }
+
+        .left {
+            float: left;
+        }
+    </style>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0"></script>
+    <script src="./index.js"></script>
+    <script src="../vae.js"></script>
+</html>

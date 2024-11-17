@@ -1,0 +1,23 @@
+{
+  "name": "bs-environment-compressor",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "description": "",
+  "dependencies": {
+    "@tensorflow/tfjs-data": "^4.21.0",
+    "@tensorflow/tfjs-node": "^4.22.0",
+    "@tensorflow/tfjs-node-gpu": "^4.21.0",
+    "canvas": "^3.0.0-rc2",
+    "express": "^4.21.1",
+    "multer": "^1.4.5-lts.1",
+    "playwright": "^1.48.1",
+    "uuid": "^10.0.0",
+    "ws": "^8.18.0"
+  }
+}
