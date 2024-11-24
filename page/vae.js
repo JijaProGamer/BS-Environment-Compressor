@@ -31,219 +31,249 @@ function ssim(img1, img2, L = 1.0, filterSize = 11, sigma = 1.5, K1 = 0.01, K2 =
 
         const mu1 = tf.depthwiseConv2d(img1, kernel, 1, 'same').squeeze();
         const mu2 = tf.depthwiseConv2d(img2, kernel, 1, 'same').squeeze();
-        
+
         const mu1_sq = tf.mul(mu1, mu1);
         const mu2_sq = tf.mul(mu2, mu2);
         const mu1_mu2 = tf.mul(mu1, mu2);
-        
+
         const sigma1_sq = tf.depthwiseConv2d(tf.mul(img1, img1), kernel, 1, 'same').squeeze().sub(mu1_sq);
         const sigma2_sq = tf.depthwiseConv2d(tf.mul(img2, img2), kernel, 1, 'same').squeeze().sub(mu2_sq);
         const sigma12 = tf.depthwiseConv2d(tf.mul(img1, img2), kernel, 1, 'same').squeeze().sub(mu1_mu2);
-        
+
         const ssim_map_numerator = tf.mul(tf.add(tf.mul(2, mu1_mu2), C1), tf.add(tf.mul(2, sigma12), C2));
         const ssim_map_denominator = tf.mul(tf.add(mu1_sq, mu2_sq).add(C1), tf.add(sigma1_sq, sigma2_sq).add(C2));
         const ssim_map = tf.div(ssim_map_numerator, ssim_map_denominator);
-        
-        return tf.mean(ssim_map).clipByValue(0, 1);
+
+        return tf.mean(ssim_map)//.clipByValue(0, 1);
     })
 }
 
-class SamplingLayer extends tf.layers.Layer {
-    constructor() {
-        super({});
-    }
+function reparameterize(zMean, zLogVar) {
+    const batch = zMean.shape[0];
+    const dim = zMean.shape[1];
 
-    computeOutputShape(inputShape) {
-        return inputShape[0];
-    }
-
-    call(inputs) {
-        return tf.tidy(() => {
-            const [zMean, zLogVar] = inputs;
-            const batch = zMean.shape[0];
-            const dim = zMean.shape[1];
-        
-            const mean = 0;
-            const std = 1.0;
-            // sample epsilon = N(0, I)
-            const epsilon = tf.randomNormal([batch, dim], mean, std);
-            return zMean.add(zLogVar.mul(0.5).exp().mul(epsilon));
-        });
-    }
-
-    getConfig() {
-        return {};
-    }
-
-    static get className() {
-        return 'SamplingLayer';
-    }
+    const mean = 0;
+    const std = 1.0;
+    // sample epsilon = N(0, I)
+    const epsilon = tf.randomNormal([batch, dim], mean, std);
+    return zMean.add(zLogVar.mul(0.5).exp().mul(epsilon));
 }
 
-tf.serialization.registerClass(SamplingLayer);
+function conv2d({ filters, kernelSize, strides, opts = {} }) {
+    const conv = tf.layers.conv2d({ filters, kernelSize, strides, padding: 'same', kernelInitializer: tf.initializers.glorotNormal(), useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }), ...opts })
+    const leakyRelu = tf.layers.leakyReLU();
 
-function conv2d(input, { filters, kernelSize, strides }) {
-    const conv = tf.layers.conv2d({ filters, kernelSize, strides, padding: 'same', kernelInitializer: tf.initializers.glorotNormal(), useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }) }).apply(input)
-    const leakyRelu = tf.layers.leakyReLU().apply(conv);
-
-    const batchNorm = tf.layers.batchNormalization( { momentum: 0.9 } ).apply(leakyRelu);
-    //const dropout = tf.layers.dropout({ rate: 0.2 }).apply(batchNorm)
-    return batchNorm;
+    const batchNorm = tf.layers.batchNormalization({ momentum: 0.9 });
+    return [conv, leakyRelu, batchNorm];
 }
 
-function conv2dTranspose(input, { filters, kernelSize, strides, activation = "relu" }) {
-    const conv = tf.layers.conv2dTranspose({ filters, kernelSize, strides, padding: 'same', kernelInitializer: tf.initializers.glorotNormal(), activation, useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }) }).apply(input)
-    const leakyRelu = tf.layers.leakyReLU().apply(conv);
+function conv2dLN({ filters, kernelSize, strides, opts = {} }) {
+    const conv = tf.layers.conv2d({ filters, kernelSize, strides, padding: 'same', kernelInitializer: tf.initializers.glorotNormal(), useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }), ...opts })
+    const leakyRelu = tf.layers.leakyReLU();
 
-    const batchNorm = tf.layers.batchNormalization( { momentum: 0.9 } ).apply(leakyRelu);
-    //const dropout = tf.layers.dropout({ rate: 0.2 }).apply(batchNorm)
-    return batchNorm;
+    //const layerNorm = tf.layers.layerNormalization();
+    //return [conv, leakyRelu, layerNorm];
+    return [conv, leakyRelu];
 }
 
-function relu(input, units) {
-    let dense = tf.layers.dense({ units, kernelInitializer: tf.initializers.glorotNormal(), useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }) }).apply(input);
-    const leakyRelu = tf.layers.leakyReLU().apply(dense);
+function conv2dTranspose({ filters, kernelSize, strides }) {
+    const conv = tf.layers.conv2dTranspose({ filters, kernelSize, strides, padding: 'same', kernelInitializer: tf.initializers.glorotNormal(), useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }) });
+    const leakyRelu = tf.layers.leakyReLU();
 
-    const batchNorm = tf.layers.batchNormalization( { momentum: 0.9 } ).apply(leakyRelu);
-    //const dropout = tf.layers.dropout({ rate: 0.2 }).apply(batchNorm)
-    return batchNorm;
+    const batchNorm = tf.layers.batchNormalization({ momentum: 0.9 });
+    return [conv, leakyRelu, batchNorm];
 }
+
+function relu(units, inputShape) {
+    let dense = tf.layers.dense({ units, kernelInitializer: tf.initializers.glorotNormal(), useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.01 }), inputShape });
+    const leakyRelu = tf.layers.leakyReLU();
+
+    const batchNorm = tf.layers.batchNormalization({ momentum: 0.9 });
+    return [dense, leakyRelu, batchNorm];
+
+}
+
+function reluLN(units, inputShape) {
+    let dense = tf.layers.dense({ units, kernelInitializer: tf.initializers.glorotNormal(), useBias: false, kernelRegularizer: tf.regularizers.l2({ l2: 0.001 }), inputShape });
+    const leakyRelu = tf.layers.leakyReLU();
+
+    //const layerNorm = tf.layers.layerNormalization();
+    //return [dense, leakyRelu, layerNorm];
+    return [dense, leakyRelu];
+}
+
+const pi = Math.PI;
+const log2pi = Math.log(2.0 * pi);
 
 function gaussianLogDensity(samples, mean, logSquaredScale) {
-    const pi = tf.scalar(Math.PI);
-    const normalization = tf.log(tf.scalar(2.0).mul(pi));
     const invSigma = tf.exp(tf.neg(logSquaredScale));
-    const tmp = samples.sub(mean);
+    const tmp = tf.sub(samples, mean);
 
-    return tmp.pow(2).mul(invSigma).mul(tf.scalar(-0.5))
-           .add(logSquaredScale)
-           .add(normalization)
-           .mul(tf.scalar(-1));
+    return tmp.square().mul(invSigma).add(logSquaredScale).add(log2pi).mul(-0.5)
 }
 
 class VAE {
     LR;
     beta;
     LatentDims;
+    Lambda;
+    CriticUpdates;
     inputShape;
 
     betaValue;
     lastLR;
 
     init() {
-        [this.encoder, this.decoder, this.apply] = this.build();
+        [this.encoder, this.decoder, this.discriminator] = this.build();
     }
 
-    build() {        
-        const encoderInput = tf.input({ shape: this.inputShape });
-        let x = conv2d(encoderInput, { filters: 32, kernelSize: 3, strides: 1 });
-        x = conv2d(x, { filters: 64, kernelSize: 3, strides: 2 });
-        x = conv2d(x, { filters: 128, kernelSize: 3, strides: 2 });
-        x = conv2d(x, { filters: 256, kernelSize: 3, strides: 2 });
-        x = conv2d(x, { filters: 64, kernelSize: 3, strides: 2 });
-        x = tf.layers.flatten().apply(x);
-        x = relu(x, 1024);
+    build() {
+        const kernelInitializer = tf.initializers.glorotNormal(); //tf.initializers.randomNormal({ mean: 0, stdDev: 0.03 })
+        const kernelRegularizer = tf.regularizers.l2({ l2: 0.01 });
 
-        const zMean = tf.layers.dense({ units: this.LatentDims }).apply(x);
-        const zLogVar = tf.layers.dense({ units: this.LatentDims }).apply(x);
-        const z = new SamplingLayer().apply([zMean, zLogVar]);
+        const encoder = tf.sequential({
+            layers: [
+                tf.layers.conv2d({ filters: 32, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, inputShape: this.inputShape }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
 
-        const encoder = tf.model({ inputs: encoderInput, outputs: [zMean, zLogVar, z], name: 'encoder' });
+                tf.layers.conv2d({ filters: 256, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
 
+                tf.layers.conv2d({ filters: 128, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
 
+                tf.layers.conv2d({ filters: 64, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
 
-        const decoderInput = tf.input({ shape: [this.LatentDims] });
-        let y = relu(decoderInput, Math.floor(this.inputShape[0] / 8) * Math.floor(this.inputShape[1] / 8) * 48);
-        y = tf.layers.reshape({ targetShape: [Math.floor(this.inputShape[0] / 8), Math.floor(this.inputShape[1] / 8), 48] }).apply(y);
-        y = conv2dTranspose(y, { filters: 256, kernelSize: 3, strides: 2 });
-        y = conv2dTranspose(y, { filters: 128, kernelSize: 3, strides: 2 });
-        y = conv2dTranspose(y, { filters: 64, kernelSize: 3, strides: 2 });
-        const decoderOutput = conv2dTranspose(y, { filters: this.inputShape[2], kernelSize: 3, strides: 1, activation: 'sigmoid' });
-
-        const decoder = tf.model({ inputs: decoderInput, outputs: decoderOutput, name: 'decoder' });
+                tf.layers.conv2d({ filters: 32, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
 
 
+                tf.layers.flatten(),
 
 
-        /*const discriminatorInput = tf.input({ shape: this.inputShape });
-        let j = conv2d(encoderInput, { filters: 32, kernelSize: 3, strides: 1 });
-        j = conv2d(x, { filters: 128, kernelSize: 3, strides: 2 });
-        j = conv2d(x, { filters: 256, kernelSize: 3, strides: 2 });
-        j = tf.layers.flatten().apply(x);
-        j = relu(x, 512);
-        
-        const discriminatorOutput = tf.layers.dense({ units: 1 }).apply(j);
-        const discriminator = tf.model({ inputs: discriminatorInput, outputs: discriminatorOutput, name: 'discriminator' });*/
+                tf.layers.dense({ units: 1024, useBias: false, kernelInitializer, kernelRegularizer }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
+
+                tf.layers.dense({ units: this.LatentDims * 2 })
+            ],
+            name: "encoder"
+        });
+
+        const resolutionDecline = 8;
+        const resolutionDeclineFilters = 48;
+        const resolutionDeclineShape = [Math.floor(this.inputShape[0] / resolutionDecline), Math.floor(this.inputShape[1] / resolutionDecline), resolutionDeclineFilters]
+        const resolutionDeclineNeurons = resolutionDeclineShape[0] * resolutionDeclineShape[1] * resolutionDeclineShape[2];
+
+        const decoder = tf.sequential({
+            layers: [
+                tf.layers.dense({ units: resolutionDeclineNeurons, inputShape: [this.LatentDims], useBias: false, kernelInitializer, kernelRegularizer }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
 
 
+                tf.layers.reshape({ targetShape: resolutionDeclineShape }),
 
-        const vaeModel = (inputs) => {
-            return tf.tidy(() => {
-                const [zMean, zLogVar, z] = this.encoder.apply(inputs);
-                const outputs = this.decoder.apply(z);
-                return [zMean, zLogVar, z, outputs];
-            });
-        };
 
-        return [encoder, decoder, vaeModel];
+                tf.layers.conv2dTranspose({ filters: 64, kernelSize: 3, strides: 2, padding: 'same', useBias: false, kernelInitializer, kernelRegularizer }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
+
+                tf.layers.conv2dTranspose({ filters: 256, kernelSize: 3, strides: 2, padding: 'same', useBias: false, kernelInitializer, kernelRegularizer }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
+
+                tf.layers.conv2dTranspose({ filters: 128, kernelSize: 3, strides: 2, padding: 'same', useBias: false, kernelInitializer, kernelRegularizer }),
+                tf.layers.batchNormalization({ momentum: 0.95 }),
+                tf.layers.leakyReLU(),
+
+
+                tf.layers.conv2dTranspose({ filters: this.inputShape[2], kernelSize: 3, strides: 1, activation: "tanh", padding: 'same', kernelInitializer, kernelRegularizer }),
+            ],
+            name: "decoder"
+        });
+
+        /*const discriminator = tf.sequential({
+            layers: [
+                tf.layers.conv2d({ filters: 64, kernelSize: 3, strides: 2, inputShape: this.inputShape, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.leakyReLU(),
+                //tf.layers.layerNormalization(),
+
+                tf.layers.conv2d({ filters: 256, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.leakyReLU(),
+                //tf.layers.layerNormalization(),
+
+                tf.layers.conv2d({ filters: 128, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.leakyReLU(),
+                //tf.layers.layerNormalization(),
+
+                tf.layers.conv2d({ filters: 32, kernelSize: 3, strides: 2, padding: 'same', kernelInitializer, kernelRegularizer, useBias: false, }),
+                tf.layers.leakyReLU(),
+                //tf.layers.layerNormalization(),
+
+
+                tf.layers.flatten(),
+
+
+                tf.layers.dense({ units: 1024, useBias: false, kernelInitializer, kernelRegularizer }),
+                tf.layers.leakyReLU(),
+                //tf.layers.layerNormalization(),
+
+
+                tf.layers.dense({ units: 1 })
+            ],
+            name: "discriminator"
+        });
+
+        return [encoder, decoder, discriminator];*/
+        return [encoder, decoder, null];
     }
 
 
 
-    loss(xTrue, yPred) {
+    loss(batch, zMean, zLogVar, z, fakeImages) {
         return tf.tidy(() => {
-            const [zMean, zLogVar, z, xPred] = yPred;
-
             // reconstruction
 
-            const mae = xTrue.sub(xPred).abs().mean();
-            const ssim_loss = tf.scalar(1).sub(
-                ssim(xTrue, xPred, 1, 11, 1.5, 0.01, 0.03)
-            );
+            const ssim_loss = tf.scalar(1).sub(ssim(batch, fakeImages, 2, 7, 1.5, 0.01, 0.03).sqrt());
+            const mae = batch.sub(fakeImages).abs().mean();
+            //let adversial = this.discriminator.apply(fakeImages, { training: true }).mean();
 
-            /*const log_sigma_opt = mse.log().mul(0.5);
-    
-            const diff = xTrue.sub(xPred);
-            const normalized = diff.div(log_sigma_opt.exp());
-            const r_loss = normalized.square().mul(0.5).add(log_sigma_opt);
+            const reconstruction = ssim_loss.mul(0.9).add(mae.mul(0.1))
+                .mul(batch.shape[1] * batch.shape[2]);
 
-            return r_loss.sum();*/
-
-            const reconstruction = mae.mul(0.25).add( ssim_loss.mul(0.75) ).mul(xTrue.shape[1] * xTrue.shape[2]);
+            //adversial = adversial.mul(tf.scalar(1).sub(reconstruction));
 
             // kl
 
-            const kl = zLogVar.add(1).sub(zMean.square()).sub(zLogVar.exp()).sum(-1).mul(-0.5).mean()
-                .mul(this.betaValue)
+            let kl = zLogVar.add(1).sub(zMean.square()).sub(zLogVar.exp()).sum(-1).mul(-0.5).mean().mul(this.betaValue / 2);
 
             // tc
 
-            /*const zMeanSquared = zMean.square();
-            const zLogVarExp = zLogVar.exp();
+            const logQzProb = gaussianLogDensity(
+                z.expandDims(1), 
+                zMean.expandDims(0), 
+                zLogVar.expandDims(0)
+            );
             
-            const logProb = tf.log(zLogVarExp);
-            const tc = tf.sum(zMeanSquared.add(zLogVarExp).sub(logProb), -1).mean();*/
+            const logQzProduct = logQzProb.logSumExp(1, false).sum(1, false)
+            const logQz = logQzProb.sum(2, false).logSumExp(1, false);
 
-            let logQzProb = gaussianLogDensity(
-                    z.expandDims(1),
-                    zMean.expandDims(0),
-                    zLogVar.expandDims(0)
-                );
+            const tc = logQz.sub(logQzProduct).mean().mul(this.betaValue / 2);
 
-        
-            const logQzProduct = logQzProb.sum(1).logSumExp(1);
-            const logQz = logQzProb.sum(2).logSumExp(1);
-        
-            const tc = logQz.sub(logQzProduct).mean()
-                .mul(0.01);
-
-            return { reconstruction, kl, tc };
+            return { reconstruction, kl, tc, adversial: tf.tensor1d([1]) };
         });
     }
 
     cosineAnnealingSchedule(epoch, batchProgress) {
         epoch += batchProgress;
-    
+
         const cycle = Math.floor(epoch / this.beta.cycle);
         const progress = (epoch % this.beta.cycle) / this.beta.cycle;
         let scheduleValue;
@@ -253,101 +283,142 @@ class VAE {
         } else {
             scheduleValue = 0.5 * (1 - Math.cos(Math.PI * (1 - progress)));
         }
-    
+
         return this.beta.min + (this.beta.max - this.beta.min) * scheduleValue;
     }
 
     getLR(epoch) {
         let closest = null;
-    
+
         for (let i = 0; i < this.LR.length; i++) {
             if (this.LR[i].epoch <= epoch) {
                 closest = this.LR[i];
             }
         }
-        
+
         return closest;
     }
 
-    async train(batch, epoch, batchProgress) {
-        //if (this.beta.mode === 'cosine') {
-        //    this.betaValue = this.cosineAnnealingSchedule(epoch, batchProgress);
-        //}
-
-        this.betaValue = 1;
+    async train(batch, epoch, batchProgress) { 
+        const batchMul = batch.mul(2);
+        const scaledBatch = batchMul.sub(1);
+        
+        
+        if (this.beta.mode === 'cosine') {
+            this.betaValue = this.cosineAnnealingSchedule(epoch, batchProgress);
+        }
 
         let learningRate = this.getLR(epoch);
-        if(this.lastLR !== JSON.stringify(learningRate)){
+        if (this.lastLR !== JSON.stringify(learningRate)) {
             this.optimizer = tf.train.adam(learningRate.LR_Autoencoder);
+            //this.discriminatorOptimizer = tf.train.rmsprop(learningRate.LR_Discriminator, undefined, 0);
+            //this.discriminatorOptimizer = tf.train.adam(learningRate.LR_Discriminator);
             this.lastLR = JSON.stringify(learningRate);
         }
 
         let discriminatorLossGlobal, reconstructionLossGlobal, adversarialLossGlobal, klLossGlobal, tcLossGlobal;
-        adversarialLossGlobal = 0;
         discriminatorLossGlobal = 0;
 
-        await tf.tidy(() => {
-            this.optimizer.minimize(() => {
-                const fakeImages = this.apply(batch);
-                const loss = this.loss(batch, fakeImages);
+        // generator training
 
-                /*const fakePred = this.discriminator.apply(fakeImages);
-                const adversarialLoss = this.adversarialLoss(fakePred);
+        await this.optimizer.minimize(() => {
+            const zData = this.encoder.apply(scaledBatch, { training: true });
+            const [zMean, zLogVar] = tf.split(zData, 2, 1)
 
-                adversarialLossGlobal = adversarialLoss.dataSync()[0];*/
-                reconstructionLossGlobal = loss.reconstruction.dataSync()[0];
-                klLossGlobal = loss.kl.dataSync()[0];
-                tcLossGlobal = loss.tc.dataSync()[0];
+            const z = reparameterize(zMean, zLogVar);
+            const fakeImages = this.decoder.apply(z, { training: true });
 
-                return loss.reconstruction.add(loss.kl)//.add(loss.tc);
-            }, false, [...this.encoder.trainableWeights.map(w => w.val), ...this.decoder.trainableWeights.map(w => w.val)]);
+            const losses = this.loss(scaledBatch, zMean, zLogVar, z, fakeImages);
 
-            /*this.discriminatorOptimizer.minimize(() => {
-                const fakeImages = this.apply(batch);
-                const fakePred = this.discriminator.apply(fakeImages);
-                const realPred = this.discriminator.apply(batch);
-    
-                const realLoss = tf.losses.sigmoidCrossEntropy(tf.onesLike(realPred), realPred);
-                const fakeLoss = tf.losses.sigmoidCrossEntropy(tf.zerosLike(fakePred), fakePred);
-    
-                let discriminatorLoss = realLoss.add(fakeLoss).div(2);
-                discriminatorLossGlobal = discriminatorLoss.dataSync()[0];
-    
-                return discriminatorLoss;//.mul(batch.shape[1] * batch.shape[2]);           
-            }, false, this.discriminator.trainableWeights.map(w => w.val));*/
-        })
+            reconstructionLossGlobal = losses.reconstruction.dataSync()[0];
+            klLossGlobal = losses.kl.dataSync()[0];
+            tcLossGlobal = losses.tc.dataSync()[0];
+            adversarialLossGlobal = losses.adversial.dataSync()[0];
 
-        tf.dispose(batch);
+            let elbo = losses.reconstruction.add(losses.kl);
+            let loss = elbo.add(losses.tc);
 
-        return { 
+            return loss;
+        }, false, [...this.encoder.trainableWeights.map(w => w.val), ...this.decoder.trainableWeights.map(w => w.val)]);
+
+        // discriminator training
+
+        /*for (let i = 0; i < this.CriticUpdates; i++) {
+            await this.discriminatorOptimizer.minimize(() => {
+                const epsilon = tf.randomUniform([scaledBatch.shape[0], 1, 1, 1], -0.3, 0.3);
+                const fakeImages = this.reconstructImages(scaledBatch, true);
+
+                const fakeImagesMixed = tf.add(
+                    tf.mul(epsilon, scaledBatch),
+                    tf.mul(tf.sub(1, epsilon), fakeImages)
+                ).clipByValue(0, 1);
+
+                const gradientsFn = tf.grad(x => this.discriminator.apply(x, { training: true }))(fakeImagesMixed);
+                const grads = tf.tensor(gradientsFn.arraySync())
+
+                const gradNorms = grads.square().sum([1, 2]).sqrt();
+                const gradientPenalty = gradNorms.sub(1).square().mean();
+                //gradientPenaltyGlobal = gradientPenalty.dataSync()[0];
+
+                const fakePred = this.discriminator.apply(fakeImages, { training: true });
+                const realPred = this.discriminator.apply(scaledBatch, { training: true });
+
+                const criticLoss = fakePred.mean().sub(realPred.mean()).add(gradientPenalty.mul(this.Lambda));
+                discriminatorLossGlobal += criticLoss.dataSync()[0];
+
+                return criticLoss;
+            }, false, this.discriminator.trainableWeights.map(w => w.val))
+        }
+
+        discriminatorLossGlobal /= this.CriticUpdates;*/
+
+
+        tf.dispose([ batch, scaledBatch, batchMul ]);
+
+        return {
             batchLoss: {
-                discriminator: discriminatorLossGlobal, 
+                discriminator: discriminatorLossGlobal,
                 reconstruction: reconstructionLossGlobal,
                 adversarial: adversarialLossGlobal,
                 tc: tcLossGlobal,
                 kl: klLossGlobal
-            }, 
+            },
             beta: this.betaValue,
-            lr: learningRate 
+            lr: learningRate
         };
     }
 
     compressImage(image) {
         return tf.tidy(() => {
-            const inputImage = image.expandDims(0);
+            const inputImage = image.expandDims(0).mul(2).sub(1);
 
-            const [zMean, zLogVar, z] = this.encoder.apply(inputImage);
+            const zData = this.encoder.apply(inputImage, { training: false });
+            const [zMean, zLogVar] = tf.split(zData, 2, 1)
 
-            return z.squeeze();
+            //const z = reparameterize(zMean, zLogVar);
+            //return z.squeeze();
+            return zMean.squeeze();
         });
     }
 
     generateImage(latentVector) {
         return tf.tidy(() => {
             const input = latentVector.expandDims(0);
-            const generatedImage = this.decoder.apply(input);
 
-            return generatedImage.squeeze().mul(255).cast('int32');
+            const generatedImage = this.decoder.apply(input, { training: false });
+            return generatedImage.add(1).div(2).squeeze().mul(255).cast('int32');
+        })
+    }
+
+    reconstructImages(images, training) {
+        return tf.tidy(() => {
+            const zData = this.encoder.apply(images, { training });
+            const [zMean, zLogVar] = tf.split(zData, 2, 1)
+
+            const z = reparameterize(zMean, zLogVar);
+            const reconstructed = this.decoder.apply(z, { training });
+
+            return reconstructed.add(1).div(2).clipByValue(0, 1);
         })
     }
 

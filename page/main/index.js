@@ -21,6 +21,8 @@ socket.addEventListener("message", async (event) => {
         model.LatentDims = modelHyperparameters.LatentDims;
         model.inputShape = modelHyperparameters.inputShape
         model.beta = modelHyperparameters.beta;
+        model.Lambda = modelHyperparameters.Lambda;
+        model.CriticUpdates = modelHyperparameters.CriticUpdates;
 
         model.init();
     }

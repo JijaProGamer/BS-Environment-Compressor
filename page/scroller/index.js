@@ -1,4 +1,5 @@
 const slidersDiv = document.querySelector(".sliders")
+const randomizer = document.querySelector(".randomizer")
 
 const canvas = document.querySelector('canvas');
 const ctx = canvas.getContext("2d")
@@ -31,6 +32,23 @@ async function init() {
 
   makeSliders();
 }
+
+function sampleGaussian(mean = 0, stdDev = 1) {
+  const u1 = Math.random();
+  const u2 = Math.random();
+
+  const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+  return z0 * stdDev + mean;
+}
+
+randomizer.addEventListener("click", async function() {
+  for (let i = 0; i < model.LatentDims; i++) {
+    latentDimValues[i] = sampleGaussian(0, 1);
+  }
+
+  setSlidersValues()
+  await renderLatent()
+})
 
 function makeSliders() {
   for (let i = 0; i < model.LatentDims; i++) {

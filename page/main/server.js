@@ -10,11 +10,13 @@ const fs = require("fs");
 const port = 4664;
 
 class VAEModel {
-  LR         = 1e-3;
-  LatentDims = 0;
-  inputShape = 0;
-  beta       = 20;
-  epoch      = 0;
+  LR            = 1e-3;
+  LatentDims    = 0;
+  Lambda        = 0;
+  CriticUpdates = 0;
+  inputShape    = 0;
+  beta          = 20;
+  epoch         = 0;
 
   savePath;
 
@@ -91,6 +93,8 @@ class VAEModel {
           LatentDims: this.LatentDims,
           inputShape: this.inputShape,
           beta: this.beta,
+          Lambda: this.Lambda,
+          CriticUpdates: this.CriticUpdates,
         })
       });
 
